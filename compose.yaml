@@ -1,0 +1,414 @@
+services:
+  # ===================
+  # Storage Layer
+  # ===================
+  
+  minio:
+    image: minio/minio
+    container_name: minio
+    hostname: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data-pipeline
+
+  minio-init:
+    image: minio/mc
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 admin password;
+      mc mb myminio/warehouse --ignore-existing;
+      mc anonymous set public myminio/warehouse;
+      exit 0;
+      "
+    networks:
+      - data-pipeline
+
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_DB: metastore_db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d metastore_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data-pipeline
+
+  # ===================
+  # Hive Metastore
+  # ===================
+
+  hive-metastore:
+    build:
+      context: ./hive-metastore
+      dockerfile: Dockerfile
+    container_name: hive-metastore
+    hostname: hive-metastore
+    ports:
+      - "9083:9083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      SERVICE_OPTS: "-Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/metastore_db -Djavax.jdo.option.ConnectionUserName=hive -Djavax.jdo.option.ConnectionPassword=hive"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "cat < /dev/null > /dev/tcp/localhost/9083"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks:
+      - data-pipeline
+
+  # ===================
+  # Kafka Ecosystem
+  # ===================
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    hostname: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "bash", "-c", "cat < /dev/null > /dev/tcp/localhost/2181"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+    networks:
+      - data-pipeline
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    hostname: kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks:
+      - data-pipeline
+
+  kafka-connect:
+    build:
+      context: ./kafka-connect
+      dockerfile: Dockerfile
+    container_name: kafka-connect
+    hostname: kafka-connect
+    ports:
+      - "8083:8083"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      hive-metastore:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      trino:
+        condition: service_healthy
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: kafka-connect-group
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password
+      AWS_REGION: us-east-1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/connectors"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks:
+      - data-pipeline
+
+  # ===================
+  # Logging Server
+  # ===================
+
+  logging-server:
+    build:
+      context: ./logging-server
+      dockerfile: Dockerfile
+    container_name: logging-server
+    hostname: logging-server
+    ports:
+      - "9998:9998"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: weather
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9998/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - data-pipeline
+
+  # ===================
+  # Client (Producer)
+  # ===================
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: client
+    hostname: client
+    depends_on:
+      logging-server:
+        condition: service_healthy
+    environment:
+      LOGGING_SERVER_URL: http://logging-server:9998
+      BATCH_SIZE: 10
+      PRODUCE_INTERVAL: 5
+    networks:
+      - data-pipeline
+
+  # ===================
+  # Real-time Analytics (Flink)
+  # ===================
+
+  postgres-analytics:
+    image: postgres:15
+    container_name: postgres-analytics
+    hostname: postgres-analytics
+    ports:
+      - "7777:5432"
+    environment:
+      POSTGRES_USER: analytics
+      POSTGRES_PASSWORD: analytics
+      POSTGRES_DB: analytics
+    volumes:
+      - postgres-analytics-data:/var/lib/postgresql/data
+      - ./flink/init-analytics-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analytics -d analytics"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data-pipeline
+
+  flink-jobmanager:
+    build:
+      context: ./flink
+      dockerfile: Dockerfile
+    container_name: flink-jobmanager
+    hostname: flink-jobmanager
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-analytics:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/overview"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - data-pipeline
+
+  flink-taskmanager:
+    build:
+      context: ./flink
+      dockerfile: Dockerfile
+    container_name: flink-taskmanager
+    hostname: flink-taskmanager
+    command: taskmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+    depends_on:
+      - flink-jobmanager
+    networks:
+      - data-pipeline
+
+  flink-sql-client:
+    build:
+      context: ./flink
+      dockerfile: Dockerfile
+    container_name: flink-sql-client
+    hostname: flink-sql-client
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        rest.address: flink-jobmanager
+        rest.port: 8081
+    command: >
+      bash -c "
+        echo 'Waiting for Flink JobManager REST API...'
+        while ! nc -z flink-jobmanager 8081; do sleep 5; done
+        echo 'Waiting for Flink JobManager RPC...'
+        while ! nc -z flink-jobmanager 6123; do sleep 5; done
+        echo 'Waiting for Kafka...'
+        while ! nc -z kafka 29092; do sleep 5; done
+        echo 'Waiting for PostgreSQL analytics...'
+        while ! nc -z postgres-analytics 5432; do sleep 5; done
+        sleep 15
+        echo 'Submitting Flink SQL job...'
+        /opt/flink/bin/sql-client.sh embedded -f /opt/flink/sql/weather-aggregation.sql
+        echo 'Job submitted. Keeping container alive...'
+        tail -f /dev/null
+      "
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+      flink-taskmanager:
+        condition: service_started
+      postgres-analytics:
+        condition: service_healthy
+    networks:
+      - data-pipeline
+
+  # ===================
+  # Visualization
+  # ===================
+
+  visualization-server:
+    build:
+      context: ./visualization-server
+      dockerfile: Dockerfile
+    container_name: visualization-server
+    hostname: visualization-server
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres-analytics:
+        condition: service_healthy
+    environment:
+      PORT: 3000
+      POSTGRES_HOST: postgres-analytics
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: analytics
+      POSTGRES_USER: analytics
+      POSTGRES_PASSWORD: analytics
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data-pipeline
+
+  # ===================
+  # Query Engine
+  # ===================
+
+  trino:
+    build:
+      context: ./trino
+      dockerfile: Dockerfile
+    container_name: trino
+    hostname: trino
+    ports:
+      - "8080:8080"
+    depends_on:
+      hive-metastore:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./trino/etc:/etc/trino
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - data-pipeline
+
+# ===================
+# Networks
+# ===================
+
+networks:
+  data-pipeline:
+    name: datapipeline
+    driver: bridge
+
+# ===================
+# Volumes
+# ===================
+
+volumes:
+  minio-data:
+  postgres-data:
+  postgres-analytics-data:

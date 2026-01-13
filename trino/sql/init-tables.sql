@@ -1,3 +1,4 @@
+drop table if exists iceberg.default.weather;
  CREATE TABLE iceberg.default.weather (   
     city varchar,                         
     temperature varchar,                  

@@ -50,7 +50,7 @@ print_status "All images built successfully!"
 
 # Step 2: Start Docker Compose
 print_status "Starting Docker Compose services..."
-docker compose up -d
+docker compose up -d --build
 
 # Step 3: Restart logging-server to ensure fresh container
 print_status "Restarting logging-server container..."

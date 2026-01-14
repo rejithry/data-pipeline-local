@@ -139,6 +139,19 @@ services:
     networks:
       - data-pipeline
 
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8090:8080"
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    networks:
+      - data-pipeline
+
   kafka-connect:
     build:
       context: ./kafka-connect
@@ -230,15 +243,9 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-      kafka-connect:
-        condition: service_healthy
       logging-server:
         condition: service_healthy
       postgres-analytics:
-        condition: service_healthy
-      flink-jobmanager:
-        condition: service_healthy
-      visualization-server:
         condition: service_healthy
       trino:
         condition: service_healthy
@@ -341,9 +348,14 @@ services:
         while ! nc -z flink-jobmanager 6123; do sleep 5; done
         echo 'Waiting for Kafka...'
         while ! nc -z kafka 29092; do sleep 5; done
+        echo 'Waiting for weather topic to be created...'
+        while ! /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list | grep -q 'weather'; do
+          echo 'waiting for topic...'
+          sleep 2
+        done
         echo 'Waiting for PostgreSQL analytics...'
         while ! nc -z postgres-analytics 5432; do sleep 5; done
-        sleep 15
+        sleep 30
         echo 'Submitting Flink SQL job...'
         /opt/flink/bin/sql-client.sh embedded -f /opt/flink/sql/weather-aggregation.sql
         echo 'Job submitted. Keeping container alive...'

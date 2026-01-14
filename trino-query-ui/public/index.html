@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trino Query UI</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 0;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    h1 {
+      margin-bottom: 20px;
+    }
+    #query-form {
+      width: 80%;
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 20px;
+    }
+    #query {
+      width: 100%;
+      height: 150px;
+      margin-bottom: 10px;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      resize: vertical;
+    }
+    #submit-btn {
+      padding: 10px 20px;
+      background-color: #007bff;
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    #results-container {
+      width: 80%;
+    }
+    #results-table {
+      width: 100%;
+      border-collapse: collapse;
+      background-color: #fff;
+    }
+    #results-table th,
+    #results-table td {
+      padding: 10px;
+      border: 1px solid #ddd;
+      text-align: left;
+    }
+    #results-table th {
+      background-color: #f2f2f2;
+    }
+  </style>
+</head>
+<body>
+  <h1>Trino Query UI</h1>
+  <form id="query-form">
+    <textarea id="query" placeholder="Enter your Trino query here..."></textarea>
+    <button id="submit-btn" type="submit">Run Query</button>
+  </form>
+  <div id="results-container">
+    <table id="results-table">
+      <thead></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <script>
+    const queryForm = document.getElementById('query-form');
+    const queryTextarea = document.getElementById('query');
+    const resultsTable = document.getElementById('results-table');
+
+    queryForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const query = queryTextarea.value;
+      if (!query) return;
+
+      try {
+        const response = await fetch('/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error);
+        }
+
+        const results = await response.json();
+        displayResults(results);
+      } catch (error) {
+        alert(`Error: ${error.message}`);
+      }
+    });
+
+    function displayResults(results) {
+      const thead = resultsTable.querySelector('thead');
+      const tbody = resultsTable.querySelector('tbody');
+      thead.innerHTML = '';
+      tbody.innerHTML = '';
+
+      if (results.data && results.data.length > 0) {
+        const headers = Object.keys(results.data[0]);
+        const headerRow = document.createElement('tr');
+        headers.forEach(header => {
+          const th = document.createElement('th');
+          th.textContent = header;
+          headerRow.appendChild(th);
+        });
+        thead.appendChild(headerRow);
+
+        results.data.forEach(row => {
+          const tr = document.createElement('tr');
+          headers.forEach(header => {
+            const td = document.createElement('td');
+            td.textContent = row[header];
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+      } else {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.textContent = 'No results found.';
+        td.colSpan = thead.childElementCount || 1;
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+      }
+    }
+  </script>
+</body>
+</html>

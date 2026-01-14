@@ -56,6 +56,7 @@ flowchart TB
     subgraph QUERY["🔍 QUERY LAYER"]
         direction TB
         Trino["Trino<br/>━━━━━━━━━━━━━━<br/>SQL Engine :8080<br/>Query Iceberg Tables"]
+        TrinoQueryUI["Trino Query UI<br/>━━━━━━━━━━━━━━<br/>Node.js :3001<br/>Web-based SQL Editor"]
     end
     
     %% Visualization Layer
@@ -88,6 +89,7 @@ flowchart TB
     %% Query Flow
     Trino -->|Query<br/>Table Schema| HiveMetastore
     Trino -->|Read<br/>Parquet Files| MinIO
+    TrinoQueryUI -->|Execute SQL<br/>via REST API| Trino
     
     %% Visualization Flow
     VizServer -->|Query<br/>Aggregated Data| PostgresAnalytics
@@ -98,7 +100,7 @@ flowchart TB
     class FlinkJM,FlinkTM,FlinkSQL processing
     class MinIO,PostgresAnalytics storage
     class PostgreSQL,HiveMetastore metadata
-    class Trino query
+    class Trino,TrinoQueryUI query
     class VizServer viz
 ```
 
@@ -168,6 +170,7 @@ sequenceDiagram
 | client | Custom | - | Python HTTP client generating weather data |
 | visualization-server | Custom (Node.js) | 3000 | Real-time dashboard with Google Charts |
 | trino | Custom (trinodb/trino base) | 8080 | SQL query engine for Iceberg tables with automatic table initialization |
+| trino-query-ui | Custom (Node.js) | 3001 | Web UI for querying Trino |
 
 ## Directory Structure
 
@@ -213,6 +216,12 @@ sequenceDiagram
         ├── jvm.config           # JVM settings
         └── catalog/
             └── iceberg.properties  # Iceberg catalog config
+└── trino-query-ui/
+    ├── Dockerfile               # Node.js 20 slim
+    ├── package.json             # express, trino-client dependencies
+    ├── server.js                # Express server with Trino connection
+    └── public/
+        └── index.html           # Simple query UI
 ```
 
 ## Flink Real-time Processing
@@ -446,6 +455,17 @@ Trino automatically creates the Iceberg table on startup by executing the SQL sc
 
 This ensures the table exists before Kafka Connect starts writing data. The table creation SQL can be modified in `trino/sql/init-tables.sql`.
 
+### Trino Query UI
+
+A simple web-based UI for querying Trino is available.
+
+- **URL**: http://localhost:3001
+- **Functionality**:
+  - Enter a Trino SQL query in the text area. 
+  - Use this format `select * from iceberg.default.weather limit 5`
+  - Click "Run Query" to execute the query.
+  - The results will be displayed in a table below the query editor.
+
 ### Dependencies
 
 - **kafka-connect** depends on **trino** being healthy before starting
@@ -527,6 +547,7 @@ docker compose logs -f
 
 ### Access Services
 
+- **Trino Query UI**: http://localhost:3001 (web-based SQL editor)
 - **Weather Dashboard**: http://localhost:3000 (real-time visualization)
 - **Logging Server**: http://localhost:9998
 - **MinIO Console**: http://localhost:9001 (admin/password)

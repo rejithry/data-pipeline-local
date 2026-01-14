@@ -322,6 +322,138 @@
       background: rgba(59, 130, 246, 0.2);
     }
 
+    /* Control Buttons */
+    .service-controls {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }
+
+    .control-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.25rem;
+      padding: 0.375rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: 1px solid;
+    }
+
+    .control-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .control-btn.pause {
+      background: rgba(245, 158, 11, 0.1);
+      border-color: rgba(245, 158, 11, 0.3);
+      color: var(--accent-yellow);
+    }
+
+    .control-btn.pause:hover:not(:disabled) {
+      background: rgba(245, 158, 11, 0.2);
+    }
+
+    .control-btn.resume {
+      background: rgba(16, 185, 129, 0.1);
+      border-color: rgba(16, 185, 129, 0.3);
+      color: var(--accent-green);
+    }
+
+    .control-btn.resume:hover:not(:disabled) {
+      background: rgba(16, 185, 129, 0.2);
+    }
+
+    .control-btn.stop {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.3);
+      color: var(--accent-red);
+    }
+
+    .control-btn.stop:hover:not(:disabled) {
+      background: rgba(239, 68, 68, 0.2);
+    }
+
+    .control-btn.start {
+      background: rgba(16, 185, 129, 0.1);
+      border-color: rgba(16, 185, 129, 0.3);
+      color: var(--accent-green);
+    }
+
+    .control-btn.start:hover:not(:disabled) {
+      background: rgba(16, 185, 129, 0.2);
+    }
+
+    .control-btn.restart {
+      background: rgba(59, 130, 246, 0.1);
+      border-color: rgba(59, 130, 246, 0.3);
+      color: var(--accent-blue);
+    }
+
+    .control-btn.restart:hover:not(:disabled) {
+      background: rgba(59, 130, 246, 0.2);
+    }
+
+    .control-btn.loading {
+      pointer-events: none;
+    }
+
+    .control-btn .spinner-small {
+      width: 12px;
+      height: 12px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    /* Toast Notifications */
+    .toast-container {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .toast {
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      animation: slideIn 0.3s ease;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .toast.success {
+      background: rgba(16, 185, 129, 0.9);
+      color: white;
+    }
+
+    .toast.error {
+      background: rgba(239, 68, 68, 0.9);
+      color: white;
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
     /* Logs Panel */
     .logs-panel {
       position: fixed;
@@ -531,6 +663,8 @@
 
   <div class="overlay" id="overlay"></div>
   
+  <div class="toast-container" id="toastContainer"></div>
+  
   <div class="logs-panel" id="logsPanel">
     <div class="logs-header">
       <div class="logs-title" id="logsPanelTitle">Logs</div>
@@ -624,11 +758,49 @@
         
         categoryServices.forEach(service => {
           const isRunning = service.container.running;
+          const isPaused = service.container.paused;
           const isHealthy = service.serviceUp;
-          const statusClass = isRunning ? (isHealthy ? 'running' : 'starting') : 'stopped';
-          const statusText = isRunning ? (isHealthy ? 'Healthy' : 'Starting') : 'Stopped';
-          const cardClass = isHealthy ? 'healthy' : 'unhealthy';
+          const statusClass = isPaused ? 'starting' : (isRunning ? (isHealthy ? 'running' : 'starting') : 'stopped');
+          const statusText = isPaused ? 'Paused' : (isRunning ? (isHealthy ? 'Healthy' : 'Starting') : 'Stopped');
+          const cardClass = isHealthy && !isPaused ? 'healthy' : 'unhealthy';
           const isSelected = selectedService === service.name ? 'selected' : '';
+          
+          // Generate control buttons based on container state
+          let controlButtons = '';
+          if (isRunning && !isPaused) {
+            controlButtons = `
+              <button class="control-btn pause" onclick="controlContainer(event, '${service.name}', 'pause')" title="Pause container">
+                ⏸ Pause
+              </button>
+              <button class="control-btn stop" onclick="controlContainer(event, '${service.name}', 'stop')" title="Stop container">
+                ⏹ Stop
+              </button>
+            `;
+          } else if (isPaused) {
+            controlButtons = `
+              <button class="control-btn resume" onclick="controlContainer(event, '${service.name}', 'unpause')" title="Resume container">
+                ▶ Resume
+              </button>
+              <button class="control-btn stop" onclick="controlContainer(event, '${service.name}', 'stop')" title="Stop container">
+                ⏹ Stop
+              </button>
+            `;
+          } else {
+            controlButtons = `
+              <button class="control-btn start" onclick="controlContainer(event, '${service.name}', 'start')" title="Start container">
+                ▶ Start
+              </button>
+            `;
+          }
+          
+          // Add restart button for running containers
+          if (isRunning) {
+            controlButtons += `
+              <button class="control-btn restart" onclick="controlContainer(event, '${service.name}', 'restart')" title="Restart container">
+                🔄 Restart
+              </button>
+            `;
+          }
           
           html += `
             <div class="service-card ${cardClass} ${isSelected}" onclick="selectService('${service.name}')">
@@ -645,6 +817,9 @@
               <div class="service-details">
                 ${service.port ? `<div class="detail-item"><span class="detail-icon">🔌</span> Port ${service.port}</div>` : ''}
                 <div class="detail-item"><span class="detail-icon">📦</span> ${service.type}</div>
+              </div>
+              <div class="service-controls">
+                ${controlButtons}
               </div>
               ${service.webPort ? `<a href="http://localhost:${service.webPort}" target="_blank" class="service-link" onclick="event.stopPropagation()">Open UI ↗</a>` : ''}
             </div>
@@ -713,6 +888,55 @@
       const div = document.createElement('div');
       div.textContent = text;
       return div.innerHTML;
+    }
+
+    // Show toast notification
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.innerHTML = `${type === 'success' ? '✓' : '✕'} ${message}`;
+      container.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.style.animation = 'slideIn 0.3s ease reverse';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    // Control container (pause, unpause, stop, start, restart)
+    async function controlContainer(event, containerName, action) {
+      event.stopPropagation();
+      
+      const button = event.target.closest('.control-btn');
+      const originalContent = button.innerHTML;
+      button.innerHTML = '<span class="spinner-small"></span>';
+      button.classList.add('loading');
+      button.disabled = true;
+      
+      try {
+        const response = await fetch(`/api/containers/${containerName}/${action}`, {
+          method: 'POST',
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+          showToast(result.message, 'success');
+          // Request immediate status update
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action: 'refresh' }));
+          }
+        } else {
+          showToast(result.error || 'Action failed', 'error');
+        }
+      } catch (error) {
+        showToast(`Error: ${error.message}`, 'error');
+      } finally {
+        button.innerHTML = originalContent;
+        button.classList.remove('loading');
+        button.disabled = false;
+      }
     }
 
     // Event Listeners

@@ -429,6 +429,20 @@ services:
     networks:
       - data-pipeline
 
+  trino-query-ui:
+    build:
+      context: ./trino-query-ui
+      dockerfile: Dockerfile
+    container_name: trino-query-ui
+    hostname: trino-query-ui
+    ports:
+      - "3001:3001"
+    depends_on:
+      trino:
+        condition: service_healthy
+    networks:
+      - data-pipeline
+
 # ===================
 # Networks
 # ===================

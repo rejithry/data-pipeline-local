@@ -84,12 +84,13 @@ async function getContainerStatus(containerName) {
     return {
       exists: true,
       running: info.State.Running,
+      paused: info.State.Paused,
       status: info.State.Status,
       health: info.State.Health?.Status || 'none',
       startedAt: info.State.StartedAt,
     };
   } catch {
-    return { exists: false, running: false, status: 'not found', health: 'none' };
+    return { exists: false, running: false, paused: false, status: 'not found', health: 'none' };
   }
 }
 
@@ -176,6 +177,99 @@ app.get('/api/containers', async (req, res) => {
     const containers = await docker.listContainers({ all: true });
     res.json(containers);
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// API: Pause a container
+app.post('/api/containers/:container/pause', async (req, res) => {
+  try {
+    const container = docker.getContainer(req.params.container);
+    const info = await container.inspect();
+    
+    if (!info.State.Running) {
+      return res.status(400).json({ error: 'Container is not running' });
+    }
+    
+    if (info.State.Paused) {
+      return res.status(400).json({ error: 'Container is already paused' });
+    }
+    
+    await container.pause();
+    console.log(`Container ${req.params.container} paused`);
+    res.json({ success: true, message: `Container ${req.params.container} paused` });
+  } catch (error) {
+    console.error(`Error pausing container: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// API: Unpause a container
+app.post('/api/containers/:container/unpause', async (req, res) => {
+  try {
+    const container = docker.getContainer(req.params.container);
+    const info = await container.inspect();
+    
+    if (!info.State.Paused) {
+      return res.status(400).json({ error: 'Container is not paused' });
+    }
+    
+    await container.unpause();
+    console.log(`Container ${req.params.container} unpaused`);
+    res.json({ success: true, message: `Container ${req.params.container} resumed` });
+  } catch (error) {
+    console.error(`Error unpausing container: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// API: Stop a container
+app.post('/api/containers/:container/stop', async (req, res) => {
+  try {
+    const container = docker.getContainer(req.params.container);
+    const info = await container.inspect();
+    
+    if (!info.State.Running) {
+      return res.status(400).json({ error: 'Container is not running' });
+    }
+    
+    await container.stop();
+    console.log(`Container ${req.params.container} stopped`);
+    res.json({ success: true, message: `Container ${req.params.container} stopped` });
+  } catch (error) {
+    console.error(`Error stopping container: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// API: Start a container
+app.post('/api/containers/:container/start', async (req, res) => {
+  try {
+    const container = docker.getContainer(req.params.container);
+    const info = await container.inspect();
+    
+    if (info.State.Running) {
+      return res.status(400).json({ error: 'Container is already running' });
+    }
+    
+    await container.start();
+    console.log(`Container ${req.params.container} started`);
+    res.json({ success: true, message: `Container ${req.params.container} started` });
+  } catch (error) {
+    console.error(`Error starting container: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// API: Restart a container
+app.post('/api/containers/:container/restart', async (req, res) => {
+  try {
+    const container = docker.getContainer(req.params.container);
+    await container.restart();
+    console.log(`Container ${req.params.container} restarted`);
+    res.json({ success: true, message: `Container ${req.params.container} restarted` });
+  } catch (error) {
+    console.error(`Error restarting container: ${error.message}`);
     res.status(500).json({ error: error.message });
   }
 });

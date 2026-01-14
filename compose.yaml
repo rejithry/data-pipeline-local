@@ -443,6 +443,23 @@ services:
     networks:
       - data-pipeline
 
+  # ===================
+  # Service Dashboard
+  # ===================
+
+  service-dashboard:
+    build:
+      context: ./service-dashboard
+      dockerfile: Dockerfile
+    container_name: service-dashboard
+    hostname: service-dashboard
+    ports:
+      - "4000:4000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - data-pipeline
+
 # ===================
 # Networks
 # ===================

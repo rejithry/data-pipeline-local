@@ -14,6 +14,7 @@ flowchart TB
     classDef query fill:#F39C12,stroke:#C87F0A,stroke-width:3px,color:#fff,font-weight:bold
     classDef viz fill:#E74C3C,stroke:#B03A2E,stroke-width:3px,color:#fff,font-weight:bold
     classDef metadata fill:#34495E,stroke:#2C3E50,stroke-width:3px,color:#fff,font-weight:bold
+    classDef monitoring fill:#1ABC9C,stroke:#16A085,stroke-width:3px,color:#fff,font-weight:bold
     
     %% Data Generation Layer
     subgraph GEN["📊 DATA GENERATION LAYER"]
@@ -65,6 +66,12 @@ flowchart TB
         VizServer["Visualization Server<br/>━━━━━━━━━━━━━━<br/>Node.js :3000<br/>Real-time Dashboard"]
     end
     
+    %% Monitoring Layer
+    subgraph MON["🖥️ MONITORING LAYER"]
+        direction TB
+        ServiceDash["Service Dashboard<br/>━━━━━━━━━━━━━━<br/>Node.js :4000<br/>Container Monitoring"]
+    end
+    
     %% Data Flow - Generation
     Client -->|HTTP GET<br/>/log?city=X&temp=Y| LoggingServer
     LoggingServer -->|Produce JSON<br/>to weather topic| Kafka
@@ -102,9 +109,8 @@ flowchart TB
     class PostgreSQL,HiveMetastore metadata
     class Trino,TrinoQueryUI query
     class VizServer viz
+    class ServiceDash monitoring
 ```
-
-> **💡 View the Diagram in Your Browser:** Open `architecture-diagram.html` in any web browser for an interactive, full-screen view of the architecture diagram.
 
 ## Data Flow
 
@@ -112,15 +118,26 @@ flowchart TB
 sequenceDiagram
     participant C as Client
     participant LS as Logging Server
+    participant ZK as Zookeeper
     participant K as Kafka
     participant KC as Kafka Connect
-    participant F as Flink
+    participant FJM as Flink JobManager
+    participant FTM as Flink TaskManager
+    participant FSQL as Flink SQL Client
     participant PA as PostgreSQL Analytics
     participant V as Visualization Server
+    participant PG as PostgreSQL Metastore
     participant HMS as Hive Metastore
     participant M as MinIO
     participant T as Trino
+    participant TUI as Trino Query UI
+    participant SD as Service Dashboard
     
+    Note over ZK,K: Kafka Cluster Initialization
+    ZK->>ZK: Start coordination service
+    K->>ZK: Register broker
+    
+    Note over C,LS: Data Ingestion (Every 5 seconds)
     loop Every 5 seconds
         C->>C: Generate 10 weather records
         loop For each record
@@ -130,25 +147,40 @@ sequenceDiagram
         end
     end
     
+    Note over KC,M: Batch Processing Path
     par Batch Processing
         KC->>K: Consume from 'weather' topic
         KC->>HMS: Create/update Iceberg table metadata
+        HMS->>PG: Store catalog metadata
         KC->>M: Write Parquet files to s3a://warehouse/
     and Real-time Processing
-        F->>K: Consume from 'weather' topic
-        F->>F: Aggregate avg temp per city every 5 seconds
-        F->>PA: Write to weather table
-    and Visualization
+        Note over FJM,PA: Flink Streaming Pipeline
+        FSQL->>FJM: Submit SQL job
+        FJM->>FTM: Distribute tasks
+        FTM->>K: Consume from 'weather' topic
+        FTM->>FTM: Aggregate avg temp per city (5s windows)
+        FTM->>PA: Write to weather table
+    and Visualization Updates
         V->>PA: Poll for new data (every 2s)
         PA-->>V: Return aggregated data
         V->>V: Update Google Charts
     end
     
+    Note over T,TUI: Query Path
+    TUI->>T: Execute SQL via REST API
     T->>HMS: Query table schema & partitions
+    HMS->>PG: Fetch catalog data
+    PG-->>HMS: Return metadata
     HMS-->>T: Return metadata
     T->>M: Read Parquet files
     M-->>T: Return data
     T-->>T: Execute SQL query
+    T-->>TUI: Return results
+    
+    Note over SD: Monitoring (Continuous)
+    SD->>SD: Poll Docker socket every 5s
+    SD->>SD: Health check all services
+    SD->>SD: Stream logs on demand
 ```
 
 ## Container Details
@@ -171,6 +203,7 @@ sequenceDiagram
 | visualization-server | Custom (Node.js) | 3000 | Real-time dashboard with Google Charts |
 | trino | Custom (trinodb/trino base) | 8080 | SQL query engine for Iceberg tables with automatic table initialization |
 | trino-query-ui | Custom (Node.js) | 3001 | Web UI for querying Trino |
+| service-dashboard | Custom (Node.js) | 4000 | Real-time monitoring dashboard for all services and containers |
 
 ## Directory Structure
 
@@ -216,12 +249,18 @@ sequenceDiagram
         ├── jvm.config           # JVM settings
         └── catalog/
             └── iceberg.properties  # Iceberg catalog config
-└── trino-query-ui/
+├── trino-query-ui/
+│   ├── Dockerfile               # Node.js 20 slim
+│   ├── package.json             # express dependencies
+│   ├── server.js                # Express server with Trino connection
+│   └── public/
+│       └── index.html           # Simple query UI
+└── service-dashboard/
     ├── Dockerfile               # Node.js 20 slim
-    ├── package.json             # express, trino-client dependencies
-    ├── server.js                # Express server with Trino connection
+    ├── package.json             # express, dockerode, ws dependencies
+    ├── server.js                # Express server with Docker socket access
     └── public/
-        └── index.html           # Simple query UI
+        └── index.html           # Service monitoring dashboard
 ```
 
 ## Flink Real-time Processing
@@ -466,6 +505,19 @@ A simple web-based UI for querying Trino is available.
   - Click "Run Query" to execute the query.
   - The results will be displayed in a table below the query editor.
 
+### Service Dashboard
+
+The Service Dashboard is your **one-stop place to monitor all services and containers** in the data pipeline. It provides real-time visibility into the health and status of every component.
+
+- **URL**: http://localhost:4000
+- **Features**:
+  - **Real-time status monitoring**: All services displayed as cards grouped by category (Storage, Kafka, Processing, Query, etc.)
+  - **Health indicators**: Visual status badges showing Healthy/Starting/Stopped state for each service
+  - **Live updates**: WebSocket connection refreshes status every 5 seconds
+  - **Container logs**: Click any service card to view its Docker logs in a slide-out panel
+  - **Quick access links**: Direct links to open web UIs for services that have them
+  - **Stats overview**: Dashboard header shows healthy/unhealthy/total service counts
+
 ### Dependencies
 
 - **kafka-connect** depends on **trino** being healthy before starting
@@ -523,6 +575,10 @@ Open http://localhost:8081 to view the Flink web UI and monitor running jobs.
 
 ### View Logs
 
+**Using Service Dashboard (Recommended):**
+Open http://localhost:4000 and click on any service card to view its logs in an interactive panel.
+
+**Using CLI:**
 ```bash
 # Client logs
 docker compose logs -f client
@@ -547,6 +603,7 @@ docker compose logs -f
 
 ### Access Services
 
+- **Service Dashboard**: http://localhost:4000 (one-stop monitoring for all services)
 - **Trino Query UI**: http://localhost:3001 (web-based SQL editor)
 - **Weather Dashboard**: http://localhost:3000 (real-time visualization)
 - **Logging Server**: http://localhost:9998
